@@ -1,0 +1,172 @@
+
+- 
+  name: Deploy and Configure Database
+  become: yes
+  become_method: sudo
+  hosts: server1
+  tasks:
+  -
+    name: Add apt key
+    command: apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 0xcbcb082a1bb943db
+  -
+    name: Add MariaDB key
+    command: apt-key adv --fetch-keys https://mariadb.org/mariadb_release_signing_key.asc
+  -
+    name: Add MariaDB Repo
+    apt_repository: 
+      filename: MariaDB-10.2
+      repo: deb [arch=amd64] http://mariadb.mirror.globo.tech/repo/10.5/ubuntu focal main
+      state: present
+  -
+    name: Install MariaDB
+    apt:
+      name: mariadb-server
+      state: present
+      update_cache: yes
+  -
+    name: start mariadb service
+    service:
+      name: mariadb
+      state: started
+  - 
+    name: enable mariadb service
+    service:
+      name: mariadb
+      enabled: true
+
+-
+  name: Configure Database
+  become: yes
+  become_method: sudo
+  hosts: server1
+  tasks:
+  - name: Install Utility software
+    apt: name={{item}} state=latest update_cache=yes
+    loop:
+      - software-properties-common
+      - python3-mysqldb
+
+  - name: Is root password set?
+    command: mysql -u root --execute "SELECT NOW()"
+    register: is_root_password_set
+    ignore_errors: yes
+
+  - name: Generate mysql root password
+    shell: tr -d -c "a-zA-Z0-9" \< /dev/urandom | head -c 10
+    register: mysql_root_password
+    when: is_root_password_set.rc == 0
+  
+  - name: Delete anonymous users
+    mysql_user:
+      user=""
+      state="absent"
+    when: is_root_password_set.rc == 0
+
+  - name: Generate mysql root password
+    shell: tr -d -c "a-zA-Z0-9" \< /dev/urandom | head -c 10
+    register: mysql_root_password
+    when: is_root_password_set.rc == 0
+
+  - name: Set root password
+    mysql_user:
+      user=root
+      password="{{mysql_root_password.stdout}}"
+      host=localhost
+    when: is_root_password_set.rc == 0
+
+  - name: Create myapp database
+    vars:
+      password: password
+    mysql_db:
+      name: myapp
+      login_user: root
+      login_password: "{{password}}"
+      state: present
+    when: is_root_password_set.rc == 0
+  
+  - name: Create user for myapp db
+    vars:
+      password: password
+    mysql_user:
+      name: myapp_rw
+      host: "{{ansible_host}}"
+      password: "{{password}}"
+      priv: myapp.*:SELECT,INSERT,UPDATE,DELETE
+      login_user:
+      login_password: "{{password}}"
+      state: present
+    when: is_root_password_set.rc == 0
+-
+  name: Create the db-load-script.sql
+  become: yes
+  become_method: sudo
+  hosts: server1
+  tasks:
+  -
+    name: Create the db-load-script.sql and add script
+    command: touch db-load-script.sql
+  -
+    name: add line to db-load-script.sql
+    lineinfile: 
+      path: db-load-script.sql
+      line: USE myapp;
+  -
+    name: add line to db-load-script.sql2
+    lineinfile: 
+      path: db-load-script.sql
+      line: CREATE TABLE products (id mediumint(8) unsigned NOT NULL auto_increment,Name varchar(255) default NULL,Price varchar(255) default NULL, ImageUrl varchar(255) default NULL,PRIMARY KEY (id)) AUTO_INCREMENT=1;
+  -
+    name: add line to db-load-script.sql3
+    lineinfile: 
+      path: db-load-script.sql
+      line: INSERT INTO products (Name,Price,ImageUrl) VALUES ("Laptop","100","c-1.png"),("Drone","200","c-2.png"),("VR","300","c-3.png"),("Tablet","50","c-5.png"),("Watch","90","c-6.png"),("Phone Covers","20","c-7.png"),("Phone","80","c-8.png"),("Laptop","150","c-4.png");
+  -
+    name: insert sample data into database
+    vars:
+      password: password
+    mysql_db: name=myapp state=import target=db-load-script.sql login_user=root login_password="{{password}}"
+
+-
+  name: Deploy & Configure Web
+  become: yes
+  become_method: sudo
+  hosts: server1
+  tasks:
+  -
+    name: Install httpd
+    apt:
+      name: "{{item}}"
+      state: present
+      update_cache: yes
+    loop:
+      - apache2
+      - php
+      - php-mysql
+  -
+    name: Change DirectoryIndex index.html to DirectoryIndex index.php to make the php page the default page
+    command: sed -i 's/index.html/index.php/g' /etc/apache2/mods-enabled/dir.conf
+  -
+    name: start httpd service
+    service:
+      name: apache2
+      state: started
+  - 
+    name: enable httpd service
+    service:
+      name: apache2
+      enabled: true
+  -
+    name: Install git 
+    apt:
+      name: git
+      state: present
+      update_cache: yes
+  -
+    name: remove index.html
+    command: rm -r /var/www/html/index.html
+  -
+    name: clone repo to target server1
+    command: git clone https://github.com/kodekloudhub/learning-app-ecommerce.git /var/www/html/
+  -
+    name: Update index.php file to connect to the right database server.
+    command: sed -i 's/172.20.1.101/172.31.18.5/g' /var/www/html/index.php
