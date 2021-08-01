@@ -1,2 +1,2 @@
 # project-ecommerce
-Ansible Playbook for automating the deployment of the KodeKloud ecommerce website
+>Ansible Playbook for automating the deployment of the KodeKloud ecommerce website
